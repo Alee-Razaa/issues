@@ -230,9 +230,11 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             const cartUrl = container.dataset.cartUrl;
             
             // State
-            let allServices = [];
+            let allServices = []; // For category UI only - not availability
             let therapists = [];
             let therapistPhotos = {}; // Store therapist photo URLs
+            let bookableItems = []; // SINGLE SOURCE OF TRUTH for real availability
+            let serviceMetadata = {}; // Map SessionTypeId -> Service details
             let selectedServices = new Set();
             let selectedCategories = new Set();
             let filterDebounceTimer = null;
@@ -492,13 +494,18 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             
             async function init() {
                 await Promise.all([
-                    loadAllServices(),
+                    loadAllServices(), // For category UI only
                     loadTherapists()
                 ]);
                 
                 renderCategoryOptions();
-                await loadAvailability();
+                // Don't load availability until filters are applied
                 setupEventListeners();
+                
+                // Show instruction message
+                if (scheduleContent) {
+                    scheduleContent.innerHTML = '<div class="hw-mbo-instruction"><h3>Select Filters Above</h3><p>Please select a date range and treatment type to see available appointments.</p></div>';
+                }
             }
             
             async function loadAllServices() {
@@ -512,8 +519,11 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                         if (data.services && Array.isArray(data.services)) {
                             allServices = data.services;
                             
-                            // Build therapist photos lookup from service data
+                            // Build service metadata map
                             allServices.forEach(service => {
+                                if (service.Id) {
+                                    serviceMetadata[service.Id] = service;
+                                }
                                 if (service.TherapistName && service.TherapistPhoto) {
                                     therapistPhotos[service.TherapistName] = service.TherapistPhoto;
                                 }
@@ -581,7 +591,8 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                 }
             }
             
-            // Extract unique therapist names from service names
+            // DEPRECATED: Extract unique therapist names from service names (FALLBACK ONLY)
+            // With BookableItems, therapist data comes directly from Staff object
             function extractTherapistsFromServices() {
                 const therapistSet = new Set();
                 const therapistList = [];
@@ -744,13 +755,15 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                 }, 300);
             }
             
+            // REAL AVAILABILITY: Fetch from Mindbody BookableItems API
             async function loadAvailability() {
                 if (loadingState) loadingState.style.display = 'block';
                 if (errorState) errorState.style.display = 'none';
                 if (scheduleContent) scheduleContent.innerHTML = '';
                 
                 try {
-                    await loadServicesSchedule();
+                    await fetchBookableItems();
+                    renderBookableItems();
                 } catch (e) {
                     console.error('Failed to load availability:', e);
                     if (errorState) {
@@ -759,6 +772,293 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                     }
                 } finally {
                     if (loadingState) loadingState.style.display = 'none';
+                }
+            }
+            
+            // Fetch real availability from Mindbody
+            async function fetchBookableItems() {
+                const params = new URLSearchParams();
+                
+                // Get date range
+                const startDate = filterStartDate ? filterStartDate.value : '';
+                const endDate = filterEndDate ? filterEndDate.value : '';
+                
+                if (startDate) {
+                    params.append('start_date', startDate);
+                } else {
+                    // Default to today
+                    const today = new Date();
+                    params.append('start_date', today.toISOString().split('T')[0]);
+                }
+                
+                if (endDate) {
+                    params.append('end_date', endDate);
+                }
+                
+                // Get selected service IDs
+                if (selectedServices.size > 0) {
+                    selectedServices.forEach(id => {
+                        params.append('session_type_ids[]', id);
+                    });
+                } else {
+                    // If no services selected but categories selected, get all service IDs in those categories
+                    if (selectedCategories.size > 0) {
+                        allServices.forEach(service => {
+                            const serviceCat = service.Category || (service.ServiceCategory && service.ServiceCategory.Name) || service.Program || '';
+                            for (const cat of selectedCategories) {
+                                if (serviceCat.toLowerCase().includes(cat.toLowerCase().split(' ')[0]) ||
+                                    cat.toLowerCase().includes(serviceCat.toLowerCase().split(' ')[0])) {
+                                    params.append('session_type_ids[]', service.Id);
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                }
+                
+                // Get selected therapist
+                if (filterTherapist && filterTherapist.value) {
+                    const selectedTherapistName = filterTherapist.value;
+                    const therapist = therapists.find(t => t.Name === selectedTherapistName);
+                    if (therapist && therapist.Id) {
+                        params.append('staff_ids[]', therapist.Id);
+                    }
+                }
+                
+                console.log('Fetching BookableItems with params:', params.toString());
+                
+                const response = await fetch(baseUrl + 'bookable-items?' + params.toString());
+                if (!response.ok) {
+                    throw new Error('Failed to fetch bookable items');
+                }
+                
+                const data = await response.json();
+                
+                if (data.success && data.bookable_items) {
+                    bookableItems = data.bookable_items;
+                    console.log('Received ' + bookableItems.length + ' bookable items from Mindbody');
+                    
+                    // Apply time filter client-side (Mindbody API doesn't support time-of-day filtering)
+                    if (filterTime && filterTime.value) {
+                        const timeRange = filterTime.value;
+                        let minHour, maxHour;
+                        
+                        switch(timeRange) {
+                            case 'morning':
+                                minHour = 9;
+                                maxHour = 12;
+                                break;
+                            case 'afternoon':
+                                minHour = 12;
+                                maxHour = 17;
+                                break;
+                            case 'evening':
+                                minHour = 17;
+                                maxHour = 21;
+                                break;
+                        }
+                        
+                        if (minHour !== undefined) {
+                            const originalCount = bookableItems.length;
+                            bookableItems = bookableItems.filter(item => {
+                                const hour = new Date(item.StartDateTime).getHours();
+                                return hour >= minHour && hour < maxHour;
+                            });
+                            console.log('Time filter applied: ' + timeRange + ' (' + bookableItems.length + '/' + originalCount + ' slots)');
+                        }
+                    }
+                } else {
+                    bookableItems = [];
+                    console.warn('No bookable items returned');
+                }
+            }
+            
+            // Render BookableItems in the UI
+            function renderBookableItems() {
+                if (!scheduleContent) return;
+                
+                if (bookableItems.length === 0) {
+                    scheduleContent.innerHTML = '<div class="hw-mbo-no-results"><h3>No Appointments Available</h3><p>There are no available appointments for the selected filters. Try adjusting your date range, service, or therapist selection.</p></div>';
+                    return;
+                }
+                
+                // Group by therapist and treatment
+                const groupedData = {};
+                
+                bookableItems.forEach(item => {
+                    // Get staff info
+                    const staff = item.Staff || {};
+                    const therapistName = (staff.FirstName || '') + ' ' + (staff.LastName || '');
+                    const staffId = staff.Id || '';
+                    const staffPhoto = staff.ImageUrl || therapistPhotos[therapistName.trim()] || '';
+                    
+                    // Get session type info
+                    const sessionType = item.SessionType || {};
+                    const serviceName = sessionType.Name || '';
+                    const sessionTypeId = sessionType.Id || '';
+                    
+                    // Get time info
+                    const startDateTime = item.StartDateTime || '';
+                    const endDateTime = item.EndDateTime || '';
+                    
+                    // Get location
+                    const location = item.Location || {};
+                    const locationName = location.Name || defaultLocation;
+                    
+                    // Get bookable item ID (CRITICAL for booking)
+                    const bookableItemId = item.Id || '';
+                    
+                    // Parse base treatment name (remove therapist and duration)
+                    let baseName = serviceName
+                        .replace(/\s*-\s*[A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+)?\s*(?:-|$)/gi, ' ')
+                        .replace(/\s*-?\s*\d+\s*(?:min|mins|minutes|\')\s*/gi, '')
+                        .replace(/\s*-\s*\d+\s*$/g, '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    
+                    // Group key
+                    const groupKey = therapistName.trim() + '||' + baseName;
+                    
+                    if (!groupedData[groupKey]) {
+                        groupedData[groupKey] = {
+                            therapistName: therapistName.trim(),
+                            staffId: staffId,
+                            staffPhoto: staffPhoto,
+                            baseName: baseName,
+                            sessionTypeId: sessionTypeId,
+                            timeSlots: []
+                        };
+                    }
+                    
+                    // Add this time slot
+                    groupedData[groupKey].timeSlots.push({
+                        bookableItemId: bookableItemId,
+                        startDateTime: startDateTime,
+                        endDateTime: endDateTime,
+                        locationName: locationName,
+                        serviceName: serviceName
+                    });
+                });
+                
+                // Sort time slots by date/time
+                Object.values(groupedData).forEach(group => {
+                    group.timeSlots.sort((a, b) => {
+                        return new Date(a.startDateTime) - new Date(b.startDateTime);
+                    });
+                });
+                
+                // Render table
+                let html = '<table class="hw-mbo-schedule-table"><thead><tr>';
+                html += '<th>Therapist</th>';
+                html += '<th>Treatment</th>';
+                html += '<th>Duration</th>';
+                html += '<th>Price</th>';
+                html += '<th>Available Times</th>';
+                html += '<th>Action</th>';
+                html += '</tr></thead><tbody>';
+                
+                const groups = Object.values(groupedData);
+                groups.forEach(group => {
+                    const therapistName = group.therapistName;
+                    const staffId = group.staffId;
+                    const staffPhoto = group.staffPhoto;
+                    const baseName = group.baseName;
+                    const timeSlots = group.timeSlots;
+                    
+                    // Get service metadata with fallback
+                    const serviceMeta = serviceMetadata[group.sessionTypeId] || {};
+                    
+                    // Calculate duration from time slots if not in metadata
+                    let duration = serviceMeta.Duration || '';
+                    if (!duration && group.timeSlots.length > 0) {
+                        const firstSlot = group.timeSlots[0];
+                        if (firstSlot.startDateTime && firstSlot.endDateTime) {
+                            const start = new Date(firstSlot.startDateTime);
+                            const end = new Date(firstSlot.endDateTime);
+                            duration = Math.round((end - start) / 60000); // Convert ms to minutes
+                        }
+                    }
+                    
+                    // Get price from metadata, or fallback to SessionType in BookableItem
+                    let price = serviceMeta.Price || serviceMeta.OnlinePrice || 0;
+                    if (!price && group.timeSlots.length > 0) {
+                        // Try to get price from first BookableItem's SessionType
+                        const matchingItem = bookableItems.find(item => 
+                            item.SessionType && item.SessionType.Id == group.sessionTypeId
+                        );
+                        if (matchingItem && matchingItem.SessionType) {
+                            price = matchingItem.SessionType.Price || matchingItem.SessionType.OnlinePrice || 0;
+                        }
+                    }
+                    
+                    // Therapist photo/initials
+                    const initials = therapistName.split(' ').map(n => n.charAt(0)).join('').substring(0, 2);
+                    const photoHtml = staffPhoto 
+                        ? '<img src="' + escapeHtml(staffPhoto) + '" alt="' + escapeHtml(therapistName) + '" class="hw-mbo-therapist-photo" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'inline-flex\';" /><span class="hw-mbo-therapist-initials" style="display:none;">' + escapeHtml(initials) + '</span>'
+                        : '<span class="hw-mbo-therapist-initials">' + escapeHtml(initials) + '</span>';
+                    
+                    html += '<tr>';
+                    html += '<td class="hw-mbo-therapist-cell"><div class="hw-mbo-therapist-info">' + photoHtml + '<a href="#" class="hw-mbo-therapist-name" data-staff-id="' + staffId + '">' + escapeHtml(therapistName) + ' | Therapist</a></div></td>';
+                    html += '<td><a href="#" class="hw-mbo-treatment-name" data-session-type-id="' + group.sessionTypeId + '">' + escapeHtml(baseName) + '</a></td>';
+                    html += '<td>' + escapeHtml(duration) + ' min</td>';
+                    html += '<td class="hw-mbo-price">£' + parseFloat(price).toFixed(0) + '</td>';
+                    
+                    // Show available times (REAL from Mindbody)
+                    html += '<td class="hw-mbo-times-cell"><div class="hw-mbo-times-grid">';
+                    
+                    timeSlots.forEach(slot => {
+                        const startDate = new Date(slot.startDateTime);
+                        const timeStr = String(startDate.getHours()).padStart(2, '0') + ':' + String(startDate.getMinutes()).padStart(2, '0');
+                        const dateStr = startDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+                        
+                        html += '<button class="hw-mbo-time-slot" ';
+                        html += 'data-bookable-item-id="' + slot.bookableItemId + '" ';
+                        html += 'data-session-type-id="' + group.sessionTypeId + '" ';
+                        html += 'data-staff-id="' + staffId + '" ';
+                        html += 'data-start-datetime="' + escapeHtml(slot.startDateTime) + '" ';
+                        html += 'data-end-datetime="' + escapeHtml(slot.endDateTime) + '" ';
+                        html += 'data-service-name="' + escapeHtml(slot.serviceName) + '" ';
+                        html += 'data-therapist-name="' + escapeHtml(therapistName) + '" ';
+                        html += 'data-price="' + price + '" ';
+                        html += 'data-location="' + escapeHtml(slot.locationName) + '">';
+                        html += '<span class="time">' + timeStr + '</span>';
+                        html += '<span class="date">' + dateStr + '</span>';
+                        html += '</button>';
+                    });
+                    
+                    html += '</div></td>';
+                    html += '<td><button class="hw-mbo-book-button" disabled>Select Time</button></td>';
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                
+                scheduleContent.innerHTML = html;
+                
+                // Attach time slot click handlers
+                document.querySelectorAll('.hw-mbo-time-slot').forEach(btn => {
+                    btn.addEventListener('click', handleTimeSlotSelection);
+                });
+            }
+            
+            // Handle time slot selection
+            function handleTimeSlotSelection(e) {
+                e.preventDefault();
+                const btn = e.currentTarget;
+                const row = btn.closest('tr');
+                
+                // Remove previous selection in this row
+                row.querySelectorAll('.hw-mbo-time-slot').forEach(b => b.classList.remove('selected'));
+                
+                // Mark this slot as selected
+                btn.classList.add('selected');
+                
+                // Enable book button
+                const bookBtn = row.querySelector('.hw-mbo-book-button');
+                if (bookBtn) {
+                    bookBtn.disabled = false;
+                    bookBtn.textContent = 'Book Now';
+                    bookBtn.onclick = (ev) => handleConfirmBooking(ev, btn);
                 }
             }
             
@@ -1229,21 +1529,35 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             }
             
             // Handle confirm booking - add to WooCommerce cart
-            async function handleConfirmBooking(e) {
+            async function handleConfirmBooking(e, timeSlotBtn) {
                 const btn = e.target;
                 const originalText = btn.textContent;
                 btn.textContent = 'Processing...';
                 btn.disabled = true;
                 
+                // Get data from time slot button
+                const bookableItemId = timeSlotBtn.dataset.bookableItemId;
+                const sessionTypeId = timeSlotBtn.dataset.sessionTypeId;
+                const staffId = timeSlotBtn.dataset.staffId;
+                const startDateTime = timeSlotBtn.dataset.startDatetime;
+                const endDateTime = timeSlotBtn.dataset.endDatetime;
+                const serviceName = timeSlotBtn.dataset.serviceName;
+                const therapistName = timeSlotBtn.dataset.therapistName;
+                const price = timeSlotBtn.dataset.price;
+                const location = timeSlotBtn.dataset.location;
+                
                 const formData = new FormData();
-                formData.append('action', 'hw_add_mindbody_treatment_to_cart');
+                formData.append('action', 'hw_validate_and_add_to_cart');
                 formData.append('nonce', nonce);
-                formData.append('service_id', btn.dataset.serviceId);
-                formData.append('service_name', btn.dataset.name);
-                formData.append('price', btn.dataset.price);
-                formData.append('therapist', btn.dataset.therapist);
-                formData.append('appointment_time', btn.dataset.time);
-                formData.append('appointment_date', btn.dataset.date);
+                formData.append('bookable_item_id', bookableItemId);
+                formData.append('session_type_id', sessionTypeId);
+                formData.append('staff_id', staffId);
+                formData.append('start_datetime', startDateTime);
+                formData.append('end_datetime', endDateTime);
+                formData.append('service_name', serviceName);
+                formData.append('therapist_name', therapistName);
+                formData.append('price', price);
+                formData.append('location', location);
                 
                 try {
                     const response = await fetch(ajaxUrl, {
@@ -1257,9 +1571,11 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                         // Redirect to cart/checkout
                         window.location.href = cartUrl;
                     } else {
-                        alert('Failed to add to cart: ' + (data.data || 'Unknown error'));
+                        alert('Booking Failed: ' + (data.data || data.message || 'This appointment is no longer available'));
                         btn.textContent = originalText;
                         btn.disabled = false;
+                        // Refresh availability
+                        await loadAvailability();
                     }
                 } catch (error) {
                     console.error('Booking error:', error);
@@ -1400,6 +1716,127 @@ function hw_add_mindbody_treatment_to_cart() {
 }
 add_action( 'wp_ajax_hw_add_mindbody_treatment_to_cart', 'hw_add_mindbody_treatment_to_cart' );
 add_action( 'wp_ajax_nopriv_hw_add_mindbody_treatment_to_cart', 'hw_add_mindbody_treatment_to_cart' );
+
+/**
+ * AJAX Handler: Validate and add Mindbody treatment to WooCommerce cart (NEW)
+ * 
+ * This handler validates availability in real-time before adding to cart.
+ */
+function hw_validate_and_add_to_cart() {
+    check_ajax_referer( 'hw_mindbody_book', 'nonce' );
+    
+    // Get parameters
+    $bookable_item_id = intval( $_POST['bookable_item_id'] ?? 0 );
+    $session_type_id  = intval( $_POST['session_type_id'] ?? 0 );
+    $staff_id         = intval( $_POST['staff_id'] ?? 0 );
+    $start_datetime   = sanitize_text_field( wp_unslash( $_POST['start_datetime'] ?? '' ) );
+    $end_datetime     = sanitize_text_field( wp_unslash( $_POST['end_datetime'] ?? '' ) );
+    $service_name     = sanitize_text_field( wp_unslash( $_POST['service_name'] ?? '' ) );
+    $therapist_name   = sanitize_text_field( wp_unslash( $_POST['therapist_name'] ?? '' ) );
+    $price            = floatval( $_POST['price'] ?? 0 );
+    $location         = sanitize_text_field( wp_unslash( $_POST['location'] ?? 'Primrose Hill' ) );
+    
+    if ( ! $bookable_item_id || ! $session_type_id || ! $start_datetime ) {
+        wp_send_json_error( array( 'message' => 'Invalid booking data' ) );
+    }
+    
+    // Check WooCommerce
+    if ( ! function_exists( 'WC' ) ) {
+        wp_send_json_error( array( 'message' => 'WooCommerce is not active' ) );
+    }
+    
+    // STEP 1: VALIDATE - Re-query Mindbody to verify slot is still available
+    $api = new HW_Mindbody_API();
+    
+    // Build params to check this specific slot
+    $verify_params = array(
+        'SessionTypeIds' => array( $session_type_id ),
+        'StaffIds'       => array( $staff_id ),
+        'StartDate'      => gmdate( 'Y-m-d\TH:i:s', strtotime( $start_datetime ) - 3600 ), // 1 hour before
+        'EndDate'        => gmdate( 'Y-m-d\TH:i:s', strtotime( $start_datetime ) + 3600 ), // 1 hour after
+        'Limit'          => 100,
+    );
+    
+    $bookable_items = $api->get_bookable_items( $verify_params );
+    
+    if ( is_wp_error( $bookable_items ) ) {
+        wp_send_json_error( array( 'message' => 'Unable to verify availability. Please try again.' ) );
+    }
+    
+    // Check if our specific BookableItemId exists and is available
+    $found = false;
+    foreach ( $bookable_items as $item ) {
+        if ( $item['Id'] == $bookable_item_id && 
+             isset( $item['StartDateTime'] ) && 
+             $item['StartDateTime'] == $start_datetime ) {
+            $found = true;
+            break;
+        }
+    }
+    
+    if ( ! $found ) {
+        wp_send_json_error( array( 
+            'message' => 'This appointment is no longer available. Please select another time.' 
+        ) );
+    }
+    
+    // STEP 2: Create/find WooCommerce product
+    $product_id = wc_get_product_id_by_sku( 'mb-' . $session_type_id );
+    
+    if ( ! $product_id ) {
+        $product = new WC_Product_Simple();
+        $product->set_name( $service_name );
+        $product->set_status( 'publish' );
+        $product->set_catalog_visibility( 'hidden' );
+        $product->set_sku( 'mb-' . $session_type_id );
+        $product->set_regular_price( $price );
+        $product->set_price( $price );
+        $product->set_virtual( true );
+        $product->set_sold_individually( true );
+        $product_id = $product->save();
+        
+        wp_set_object_terms( $product_id, 'Treatment', 'product_cat' );
+    } else {
+        $product = wc_get_product( $product_id );
+        if ( $product && $product->get_price() != $price ) {
+            $product->set_regular_price( $price );
+            $product->set_price( $price );
+            $product->save();
+        }
+    }
+    
+    // STEP 3: Add to cart with complete metadata
+    $cart_item_data = array(
+        '_bookable_item_id'   => $bookable_item_id, // CRITICAL for final booking
+        '_session_type_id'    => $session_type_id,
+        '_staff_id'           => $staff_id,
+        '_start_datetime'     => $start_datetime,
+        '_end_datetime'       => $end_datetime,
+        '_location'           => $location,
+        'mindbody_therapist'  => $therapist_name,
+        'mindbody_date'       => gmdate( 'Y-m-d', strtotime( $start_datetime ) ),
+        'mindbody_time'       => gmdate( 'H:i', strtotime( $start_datetime ) ),
+    );
+    
+    $cart_item_key = WC()->cart->add_to_cart( $product_id, 1, 0, array(), $cart_item_data );
+    
+    if ( $cart_item_key ) {
+        // Clear cache for this time range
+        $cache_key_pattern = 'mindbody_bookable_*';
+        // Note: WordPress doesn't support wildcard transient deletion easily
+        // Consider implementing proper cache invalidation based on booking
+        
+        wp_send_json_success( array( 
+            'message'  => 'Appointment added to cart',
+            'cart_key' => $cart_item_key 
+        ) );
+    } else {
+        wp_send_json_error( array( 'message' => 'Failed to add to cart' ) );
+    }
+}
+add_action( 'wp_ajax_hw_validate_and_add_to_cart', 'hw_validate_and_add_to_cart' );
+add_action( 'wp_ajax_nopriv_hw_validate_and_add_to_cart', 'hw_validate_and_add_to_cart' );
+
 
 /**
  * Display custom cart item data

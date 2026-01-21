@@ -73,6 +73,13 @@ function hw_mindbody_register_rest_routes() {
         'permission_callback' => '__return_true',
     ) );
     
+    // Get bookable items (real-time availability)
+    register_rest_route( $namespace, '/bookable-items', array(
+        'methods'             => 'GET',
+        'callback'            => 'hw_mindbody_rest_get_bookable_items',
+        'permission_callback' => '__return_true',
+    ) );
+    
     // Get service details
     register_rest_route( $namespace, '/service-details', array(
         'methods'             => 'GET',
@@ -1589,3 +1596,91 @@ function hw_mindbody_rest_get_therapist_availability( $request ) {
     ), 200 );
 }
 
+/**
+ * Get bookable items (real-time availability)
+ * 
+ * This is the SINGLE SOURCE OF TRUTH for appointment availability.
+ * Returns actual available time slots from Mindbody.
+ * 
+ * @param WP_REST_Request $request
+ * @return WP_REST_Response
+ */
+function hw_mindbody_rest_get_bookable_items( $request ) {
+    $api = new HW_Mindbody_API();
+    
+    // Get parameters from request
+    $session_type_ids = $request->get_param( 'session_type_ids' );
+    $staff_ids        = $request->get_param( 'staff_ids' );
+    $start_date       = $request->get_param( 'start_date' );
+    $end_date         = $request->get_param( 'end_date' );
+    $location_ids     = $request->get_param( 'location_ids' );
+    
+    // Build query parameters for Mindbody API
+    $params = array(
+        'Limit' => 500,
+    );
+    
+    // Convert dates from YYYY-MM-DD to ISO 8601 format
+    if ( $start_date ) {
+        $params['StartDate'] = gmdate( 'Y-m-d\TH:i:s', strtotime( $start_date . ' 00:00:00' ) );
+    } else {
+        // Default to today
+        $params['StartDate'] = gmdate( 'Y-m-d\T00:00:00' );
+    }
+    
+    if ( $end_date ) {
+        $params['EndDate'] = gmdate( 'Y-m-d\TH:i:s', strtotime( $end_date . ' 23:59:59' ) );
+    } else {
+        // Default to 7 days from start
+        $start_timestamp = strtotime( $params['StartDate'] );
+        $params['EndDate'] = gmdate( 'Y-m-d\T23:59:59', strtotime( '+7 days', $start_timestamp ) );
+    }
+    
+    // Add filter arrays
+    if ( ! empty( $session_type_ids ) && is_array( $session_type_ids ) ) {
+        $params['SessionTypeIds'] = array_map( 'intval', $session_type_ids );
+    }
+    
+    if ( ! empty( $staff_ids ) && is_array( $staff_ids ) ) {
+        $params['StaffIds'] = array_map( 'intval', $staff_ids );
+    }
+    
+    if ( ! empty( $location_ids ) && is_array( $location_ids ) ) {
+        $params['LocationIds'] = array_map( 'intval', $location_ids );
+    }
+    
+    // Check cache first (5 minute cache)
+    $cache_key = 'mindbody_bookable_' . md5( serialize( $params ) );
+    $cached    = get_transient( $cache_key );
+    
+    if ( false !== $cached && is_array( $cached ) ) {
+        return new WP_REST_Response( array(
+            'success'       => true,
+            'bookable_items' => $cached,
+            'cached'        => true,
+            'params'        => $params,
+        ) );
+    }
+    
+    // Fetch from Mindbody API
+    $bookable_items = $api->get_bookable_items( $params );
+    
+    if ( is_wp_error( $bookable_items ) ) {
+        return new WP_REST_Response( array(
+            'success' => false,
+            'error'   => $bookable_items->get_error_message(),
+            'params'  => $params,
+        ), 500 );
+    }
+    
+    // Cache for 5 minutes
+    set_transient( $cache_key, $bookable_items, 5 * MINUTE_IN_SECONDS );
+    
+    return new WP_REST_Response( array(
+        'success'        => true,
+        'bookable_items' => $bookable_items,
+        'cached'         => false,
+        'count'          => count( $bookable_items ),
+        'params'         => $params,
+    ) );
+}
