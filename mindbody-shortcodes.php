@@ -493,29 +493,54 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             init();
             
             async function init() {
+                console.log('🚀 [INIT] Starting initialization...');
+                
                 // Hide loading spinner initially
-                if (loadingState) loadingState.style.display = 'none';
+                if (loadingState) {
+                    loadingState.style.display = 'none';
+                    console.log('✅ [INIT] Loading spinner hidden');
+                } else {
+                    console.error('❌ [INIT] loadingState element not found!');
+                }
                 
-                await Promise.all([
-                    loadAllServices(), // For category UI only
-                    loadTherapists()
-                ]);
+                console.log('📡 [INIT] Loading services and therapists...');
+                try {
+                    await Promise.all([
+                        loadAllServices(), // For category UI only
+                        loadTherapists()
+                    ]);
+                    console.log('✅ [INIT] Services and therapists loaded successfully');
+                } catch (error) {
+                    console.error('❌ [INIT] Error loading data:', error);
+                }
                 
+                console.log('🎨 [INIT] Rendering category options...');
                 renderCategoryOptions();
+                
+                console.log('🔌 [INIT] Setting up event listeners...');
                 setupEventListeners();
                 
                 // Show instruction message initially
                 if (scheduleContent) {
                     scheduleContent.innerHTML = '<div class="hw-mbo-instruction"><h3>Select Filters Above</h3><p>Please select a date range and treatment type to see available appointments.</p><p><strong>Tip:</strong> Click the "Search" button or select filters to view available time slots.</p></div>';
+                    console.log('✅ [INIT] Instruction message displayed');
+                } else {
+                    console.error('❌ [INIT] scheduleContent element not found!');
                 }
+                
+                console.log('🎉 [INIT] Initialization complete!');
             }
             
             async function loadAllServices() {
+                console.log('📦 [SERVICES] Fetching treatment services from:', baseUrl + 'treatment-services');
                 try {
                     // Use treatment-services endpoint which filters to 8 target categories
                     const response = await fetch(baseUrl + 'treatment-services');
+                    console.log('📦 [SERVICES] Response status:', response.status, response.statusText);
+                    
                     if (response.ok) {
                         const data = await response.json();
+                        console.log('📦 [SERVICES] Data received:', data);
                         
                         // Get services from response
                         if (data.services && Array.isArray(data.services)) {
@@ -559,8 +584,10 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             
             // FIX #4: Properly load therapists from API
             async function loadTherapists() {
+                console.log('👥 [THERAPISTS] Fetching therapists from:', baseUrl + 'staff-appointments');
                 try {
                     const response = await fetch(baseUrl + 'staff-appointments');
+                    console.log('👥 [THERAPISTS] Response status:', response.status);
                     if (response.ok) {
                         const data = await response.json();
                         
@@ -759,31 +786,46 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             
             // REAL AVAILABILITY: Fetch from Mindbody BookableItems API
             async function loadAvailability() {
-                if (loadingState) loadingState.style.display = 'block';
+                console.log('⏳ [LOAD] loadAvailability called');
+                console.log('⏳ [LOAD] Selected services:', Array.from(selectedServices));
+                console.log('⏳ [LOAD] Selected categories:', Array.from(selectedCategories));
+                
+                if (loadingState) {
+                    loadingState.style.display = 'block';
+                    console.log('⏳ [LOAD] Loading spinner shown');
+                }
                 if (errorState) errorState.style.display = 'none';
                 if (scheduleContent) scheduleContent.innerHTML = '';
                 
                 try {
+                    console.log('⏳ [LOAD] Calling fetchBookableItems...');
                     await fetchBookableItems();
+                    console.log('⏳ [LOAD] Rendering bookable items...');
                     renderBookableItems();
+                    console.log('✅ [LOAD] Availability loaded successfully');
                 } catch (e) {
-                    console.error('Failed to load availability:', e);
+                    console.error('❌ [LOAD] Failed to load availability:', e);
                     if (errorState) {
                         errorState.textContent = 'Unable to load treatments. Please try again later.';
                         errorState.style.display = 'block';
                     }
                 } finally {
-                    if (loadingState) loadingState.style.display = 'none';
+                    if (loadingState) {
+                        loadingState.style.display = 'none';
+                        console.log('✅ [LOAD] Loading spinner hidden');
+                    }
                 }
             }
             
             // Fetch real availability from Mindbody
             async function fetchBookableItems() {
+                console.log('🔍 [FETCH] Starting fetchBookableItems...');
                 const params = new URLSearchParams();
                 
                 // Get date range
                 const startDate = filterStartDate ? filterStartDate.value : '';
                 const endDate = filterEndDate ? filterEndDate.value : '';
+                console.log('📅 [FETCH] Date range:', { startDate, endDate });
                 
                 if (startDate) {
                     params.append('start_date', startDate);
@@ -820,8 +862,10 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                 
                 // VALIDATION: Require at least one service filter to prevent huge data requests
                 const hasServiceFilter = params.has('session_type_ids[]');
+                console.log('🔍 [FETCH] Service filter check:', hasServiceFilter);
                 if (!hasServiceFilter) {
-                    console.warn('No services selected - please select at least one treatment type');
+                    console.warn('⚠️ [FETCH] No services selected - please select at least one treatment type');
+                    console.warn('⚠️ [FETCH] Current params:', params.toString());
                     bookableItems = [];
                     return; // Don't make API call without service filter
                 }
@@ -835,18 +879,28 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                     }
                 }
                 
-                console.log('Fetching BookableItems with params:', params.toString());
+                console.log('📡 [FETCH] Fetching BookableItems with params:', params.toString());
+                console.log('📡 [FETCH] Full URL:', baseUrl + 'bookable-items?' + params.toString());
                 
-                const response = await fetch(baseUrl + 'bookable-items?' + params.toString());
-                if (!response.ok) {
-                    throw new Error('Failed to fetch bookable items');
+                try {
+                    const response = await fetch(baseUrl + 'bookable-items?' + params.toString());
+                    console.log('📡 [FETCH] Response status:', response.status, response.statusText);
+                    
+                    if (!response.ok) {
+                        console.error('❌ [FETCH] API request failed:', response.status, response.statusText);
+                        throw new Error('Failed to fetch bookable items: ' + response.status);
+                    }
+                } catch (fetchError) {
+                    console.error('❌ [FETCH] Network error:', fetchError);
+                    throw fetchError;
                 }
                 
                 const data = await response.json();
+                console.log('📊 [FETCH] Parsed response data:', data);
                 
                 if (data.success && data.bookable_items) {
                     bookableItems = data.bookable_items;
-                    console.log('Received ' + bookableItems.length + ' bookable items from Mindbody');
+                    console.log('✅ [FETCH] Received ' + bookableItems.length + ' bookable items from Mindbody');
                     
                     // Apply time filter client-side (Mindbody API doesn't support time-of-day filtering)
                     if (filterTime && filterTime.value) {
@@ -893,9 +947,16 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             
             // Render BookableItems in the UI
             function renderBookableItems() {
-                if (!scheduleContent) return;
+                console.log('🎨 [RENDER] Starting renderBookableItems...');
+                console.log('🎨 [RENDER] bookableItems count:', bookableItems.length);
+                
+                if (!scheduleContent) {
+                    console.error('❌ [RENDER] scheduleContent element not found!');
+                    return;
+                }
                 
                 if (bookableItems.length === 0) {
+                    console.log('⚠️ [RENDER] No bookable items to display');
                     scheduleContent.innerHTML = '<div class="hw-mbo-no-results"><h3>No Appointments Available</h3><p>There are no available appointments for the selected filters. Try adjusting your date range, service, or therapist selection.</p></div>';
                     return;
                 }
@@ -1637,7 +1698,13 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                 if (filterTime) filterTime.addEventListener('change', debouncedLoadAvailability);
                 if (filterTherapist) filterTherapist.addEventListener('change', debouncedLoadAvailability);
                 
-                if (searchButton) searchButton.addEventListener('click', loadAvailability);
+                if (searchButton) {
+                    searchButton.addEventListener('click', () => {
+                        console.log('🔍 [EVENT] Search button clicked');
+                        loadAvailability();
+                    });
+                    console.log('✅ [SETUP] Search button listener attached');
+                }
                 
                 if (modalClose) {
                     modalClose.addEventListener('click', () => {
