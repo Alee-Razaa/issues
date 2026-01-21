@@ -556,29 +556,21 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                                 }
                             });
                             
-                            console.log('=== TREATMENT SERVICES LOADED ===');
-                            console.log('Total services (filtered to 8 categories): ' + allServices.length);
-                            console.log('Therapist photos available: ' + Object.keys(therapistPhotos).length);
+                            console.log('✅ [SERVICES] Loaded ' + allServices.length + ' services');
+                            console.log('✅ [SERVICES] Therapist photos available: ' + Object.keys(therapistPhotos).length);
                             
                             // Show stats if available
                             if (data.stats) {
-                                console.log('--- FILTERING STATS ---');
-                                console.log('Total in Mindbody: ' + data.stats.total_in_mindbody);
-                                console.log('Not bookable online: ' + data.stats.not_bookable_online);
-                                console.log('Wrong category: ' + data.stats.wrong_category);
-                                console.log('Duplicates removed: ' + data.stats.duplicates_removed);
-                                console.log('No duration: ' + data.stats.no_duration);
-                                console.log('Final count: ' + data.stats.final_count);
-                                console.log('Categories found:', data.stats.categories_found);
+                                console.log('📊 [SERVICES] Stats - Total: ' + data.stats.total_in_mindbody + ', Not bookable: ' + data.stats.not_bookable_online + ', Wrong category: ' + data.stats.wrong_category + ', Final: ' + data.stats.final_count);
                             }
                         } else {
                             // Fallback to array response
                             allServices = Array.isArray(data) ? data : [];
-                            console.log('Loaded ' + allServices.length + ' services (fallback)');
+                            console.log('✅ [SERVICES] Loaded ' + allServices.length + ' services (fallback)');
                         }
                     }
                 } catch (e) {
-                    console.error('Failed to load services:', e);
+                    console.error('❌ [SERVICES] Failed to load services:', e);
                 }
             }
             
@@ -606,7 +598,7 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                             therapists = extractTherapistsFromServices();
                         }
                         
-                        console.log('Loaded ' + therapists.length + ' therapists');
+                        console.log('✅ [THERAPISTS] Loaded ' + therapists.length + ' therapists');
                         renderTherapistOptions();
                     } else {
                         // Fallback: extract from services
@@ -614,7 +606,7 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                         renderTherapistOptions();
                     }
                 } catch (e) {
-                    console.error('Failed to load therapists:', e);
+                    console.error('❌ [THERAPISTS] Failed to load therapists:', e);
                     therapists = extractTherapistsFromServices();
                     renderTherapistOptions();
                 }
@@ -936,7 +928,7 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                                 const hour = new Date(item.StartDateTime).getHours();
                                 return hour >= minHour && hour < maxHour;
                             });
-                            console.log('Time filter applied: ' + timeRange + ' (' + bookableItems.length + '/' + originalCount + ' slots)');
+                            console.log('⏰ [FILTER] Time filter applied: ' + timeRange + ' (' + bookableItems.length + '/' + originalCount + ' slots)');
                         }
                     }
                 } else {
@@ -1313,7 +1305,7 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                 const daysDiff = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
                 const maxDays = Math.min(daysDiff, daysToShow);
                 
-                console.log('Date Debug:', {
+                console.log('📅 [DEBUG] Date range:', {
                     filterStart: filterStartDate ? filterStartDate.value : 'none',
                     filterEnd: filterEndDate ? filterEndDate.value : 'none',
                     startDate: startDate.toDateString(),
