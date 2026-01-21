@@ -493,18 +493,20 @@ function hw_mindbody_appointments_shortcode( $atts ) {
             init();
             
             async function init() {
+                // Hide loading spinner initially
+                if (loadingState) loadingState.style.display = 'none';
+                
                 await Promise.all([
                     loadAllServices(), // For category UI only
                     loadTherapists()
                 ]);
                 
                 renderCategoryOptions();
-                // Don't load availability until filters are applied
                 setupEventListeners();
                 
-                // Show instruction message
+                // Show instruction message initially
                 if (scheduleContent) {
-                    scheduleContent.innerHTML = '<div class="hw-mbo-instruction"><h3>Select Filters Above</h3><p>Please select a date range and treatment type to see available appointments.</p></div>';
+                    scheduleContent.innerHTML = '<div class="hw-mbo-instruction"><h3>Select Filters Above</h3><p>Please select a date range and treatment type to see available appointments.</p><p><strong>Tip:</strong> Click the "Search" button or select filters to view available time slots.</p></div>';
                 }
             }
             
@@ -816,6 +818,14 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                     }
                 }
                 
+                // VALIDATION: Require at least one service filter to prevent huge data requests
+                const hasServiceFilter = params.has('session_type_ids[]');
+                if (!hasServiceFilter) {
+                    console.warn('No services selected - please select at least one treatment type');
+                    bookableItems = [];
+                    return; // Don't make API call without service filter
+                }
+                
                 // Get selected therapist
                 if (filterTherapist && filterTherapist.value) {
                     const selectedTherapistName = filterTherapist.value;
@@ -843,6 +853,7 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                         const timeRange = filterTime.value;
                         let minHour, maxHour;
                         
+                        // Handle named ranges (morning/afternoon/evening)
                         switch(timeRange) {
                             case 'morning':
                                 minHour = 9;
@@ -856,6 +867,13 @@ function hw_mindbody_appointments_shortcode( $atts ) {
                                 minHour = 17;
                                 maxHour = 21;
                                 break;
+                        }
+                        
+                        // Handle hour-based values (e.g., "09:00")
+                        if (minHour === undefined && timeRange.includes(':')) {
+                            const parts = timeRange.split(':');
+                            minHour = parseInt(parts[0], 10);
+                            maxHour = 24; // End of day
                         }
                         
                         if (minHour !== undefined) {
